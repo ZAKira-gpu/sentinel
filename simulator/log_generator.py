@@ -155,7 +155,16 @@ COMMON_MAPPINGS = {
 def setup_indices(es: Elasticsearch):
     for index in [API_INDEX, DB_INDEX, DEPLOY_INDEX]:
         if not es.indices.exists(index=index):
-            es.indices.create(index=index, body=COMMON_MAPPINGS)
+            es.indices.create(
+                index=index,
+                mappings={
+                    "properties": {
+                        "@timestamp": {"type": "date"},
+                        "is_error":   {"type": "boolean"},
+                        "message":    {"type": "text"},
+                    }
+                }
+            )
             print(f"  ✅ Created index: {index}")
         else:
             print(f"  ℹ️  Index already exists: {index}")
@@ -190,10 +199,9 @@ def simulate(window_minutes: int = 60, logs_per_minute: int = 30):
     print("=" * 50)
 
     # Connection check
-    if not es.ping():
-        print("❌ Cannot connect to Elasticsearch. Check your .env settings.")
-        return
-    print("✅ Connected to Elasticsearch\n")
+    print(f"\n  ELASTIC_URL     = {ELASTIC_URL}")
+    print(f"  ELASTIC_API_KEY = {'SET ✅' if ELASTIC_API_KEY else 'NOT SET ❌'}\n")
+    print("🔌 Connecting to Elasticsearch...")
 
     print("📋 Setting up indices...")
     setup_indices(es)
