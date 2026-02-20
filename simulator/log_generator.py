@@ -22,15 +22,19 @@ import time
 from datetime import datetime, timedelta, timezone
 from faker import Faker
 from elasticsearch import Elasticsearch, helpers
+from dotenv import load_dotenv
+
+# Load .env file from the project root (one level up from simulator/)
+load_dotenv(os.path.join(os.path.dirname(__file__), "..", ".env"))
 
 # ──────────────────────────────────────────────
 # Configuration
 # ──────────────────────────────────────────────
 fake = Faker()
 
-ELASTIC_CLOUD_ID = os.getenv("ELASTIC_CLOUD_ID")
-ELASTIC_API_KEY  = os.getenv("ELASTIC_API_KEY")
-ES_HOST          = os.getenv("ES_HOST", "http://localhost:9200")
+# Elastic Serverless: https://PROJECT_ID.es.REGION.gcp.elastic-cloud.com
+ELASTIC_URL     = os.getenv("ELASTIC_URL", "http://localhost:9200")
+ELASTIC_API_KEY = os.getenv("ELASTIC_API_KEY")
 
 API_INDEX        = "sentinel-api-logs"
 DB_INDEX         = "sentinel-db-logs"
@@ -45,12 +49,14 @@ INCIDENT_DURATION_MINUTES      = 20
 # Elasticsearch Client
 # ──────────────────────────────────────────────
 def get_es_client() -> Elasticsearch:
-    if ELASTIC_CLOUD_ID and ELASTIC_API_KEY:
+    """Connect using Elastic Serverless URL + API Key."""
+    if ELASTIC_API_KEY:
         return Elasticsearch(
-            cloud_id=ELASTIC_CLOUD_ID,
+            ELASTIC_URL,
             api_key=ELASTIC_API_KEY,
         )
-    return Elasticsearch(ES_HOST)
+    # Fallback: unauthenticated local instance
+    return Elasticsearch(ELASTIC_URL)
 
 
 # ──────────────────────────────────────────────
