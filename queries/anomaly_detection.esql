@@ -1,0 +1,76 @@
+// ──────────────────────────────────────────────────────────────────────────
+// Elastic Sentinel — Anomaly Detection Query (ES|QL)
+// ──────────────────────────────────────────────────────────────────────────
+//
+// PURPOSE:
+//   Detect a sudden spike in HTTP 5xx error rates within a rolling
+//   time window, compared to a prior baseline window.
+//
+// HOW IT WORKS:
+//   1. Counts errors in the CURRENT window (last 5 minutes)
+//   2. Counts errors in a BASELINE window (5–10 minutes ago)
+//   3. Computes spike_ratio = current / baseline
+//   4. Flags as anomaly if spike_ratio > 2.0 (configurable)
+//
+// USAGE (Kibana Dev Tools or ES|QL API):
+//   POST /_query  { "query": "<paste query below>" }
+// ──────────────────────────────────────────────────────────────────────────
+
+
+// ── Query 1: Error Rate in Last 5 Minutes ─────────────────────────────────
+FROM sentinel-api-logs
+| WHERE @timestamp >= NOW() - 5 minutes
+| STATS
+    error_count   = COUNT_IF(is_error == true),
+    total_count   = COUNT(*),
+    error_rate_pct = ROUND(100.0 * COUNT_IF(is_error == true) / COUNT(*), 2)
+| EVAL window = "current_5min"
+
+
+// ── Query 2: Spike Detection (Current vs Baseline) ────────────────────────
+// Compares last 5 min vs previous 5 min to compute spike ratio.
+FROM sentinel-api-logs
+| WHERE @timestamp >= NOW() - 10 minutes
+| EVAL
+    window = CASE(
+        @timestamp >= NOW() - 5 minutes, "current",
+        "baseline"
+    )
+| STATS
+    error_count = COUNT_IF(is_error == true),
+    total_count = COUNT(*)
+  BY window
+| EVAL error_rate = ROUND(100.0 * error_count / total_count, 2)
+| SORT window ASC
+
+
+// ── Query 3: DB Timeout Correlation ───────────────────────────────────────
+// Find DB timeout spikes that correlate with the anomaly window.
+FROM sentinel-db-logs
+| WHERE @timestamp >= NOW() - 10 minutes
+| STATS
+    timeout_count    = COUNT_IF(is_timeout == true),
+    total_queries    = COUNT(*),
+    avg_query_time   = AVG(query_time_ms),
+    max_query_time   = MAX(query_time_ms)
+| EVAL timeout_rate_pct = ROUND(100.0 * timeout_count / total_queries, 2)
+
+
+// ── Query 4: Deployment Events Near Anomaly Window ────────────────────────
+// Find any deployments that occurred in the 15 minutes before the spike.
+FROM sentinel-deploy-logs
+| WHERE @timestamp >= NOW() - 25 minutes AND @timestamp <= NOW() - 5 minutes
+| KEEP @timestamp, deployment_id, status, version, note
+| SORT @timestamp DESC
+
+
+// ── Query 5: Error Count — Time Series (per minute) ───────────────────────
+// Used to visualise the spike over time (feed into a Kibana lens chart).
+FROM sentinel-api-logs
+| WHERE @timestamp >= NOW() - 30 minutes
+| STATS
+    errors_per_min = COUNT_IF(is_error == true),
+    total_per_min  = COUNT(*)
+  BY bucket = DATE_TRUNC(1 minute, @timestamp)
+| EVAL error_rate_pct = ROUND(100.0 * errors_per_min / total_per_min, 2)
+| SORT bucket ASC

@@ -1,0 +1,144 @@
+{
+    "name": "elastic-sentinel-incident-workflow",
+    "version": "1.0.0",
+    "description": "Step-by-step workflow the Sentinel agent follows when an anomaly is detected.",
+    "trigger": "anomaly_signal",
+    "steps": [
+        {
+            "id": "step_1_detect",
+            "name": "Detect Anomaly",
+            "tool": "detect_anomaly",
+            "input": {
+                "window_minutes": 5,
+                "baseline_window_minutes": 5,
+                "threshold_spike_ratio": 2.0
+            },
+            "on_success": {
+                "condition": "anomaly_detected == true",
+                "next_step": "step_2_api_search",
+                "else": "halt_no_incident"
+            },
+            "output_variables": [
+                "spike_ratio",
+                "current_error_rate",
+                "baseline_error_rate",
+                "spike_start_time"
+            ]
+        },
+        {
+            "id": "step_2_api_search",
+            "name": "Investigate API Logs",
+            "tool": "search_api_logs",
+            "input": {
+                "from": "{{spike_start_time - 2min}}",
+                "to": "{{spike_start_time + 10min}}",
+                "filter": {
+                    "is_error": true
+                }
+            },
+            "on_success": {
+                "next_step": "step_3_db_search"
+            },
+            "output_variables": [
+                "affected_services",
+                "top_error_endpoints",
+                "error_count"
+            ]
+        },
+        {
+            "id": "step_3_db_search",
+            "name": "Investigate DB Logs",
+            "tool": "search_db_logs",
+            "input": {
+                "from": "{{spike_start_time - 2min}}",
+                "to": "{{spike_start_time + 10min}}",
+                "min_query_time_ms": 200
+            },
+            "on_success": {
+                "next_step": "step_4_deploy_search"
+            },
+            "output_variables": [
+                "timeout_count",
+                "avg_query_time_ms",
+                "slow_tables"
+            ]
+        },
+        {
+            "id": "step_4_deploy_search",
+            "name": "Find Recent Deployments",
+            "tool": "search_deploy_logs",
+            "input": {
+                "from": "{{spike_start_time - 30min}}",
+                "to": "{{spike_start_time}}"
+            },
+            "on_success": {
+                "next_step": "step_5_correlate"
+            },
+            "output_variables": [
+                "recent_deployments",
+                "last_deployment_id",
+                "last_deployment_time"
+            ]
+        },
+        {
+            "id": "step_5_correlate",
+            "name": "Build Causal Timeline",
+            "tool": "correlate_timeline",
+            "input": {
+                "events": [
+                    {
+                        "source": "deployment",
+                        "data": "{{recent_deployments}}"
+                    },
+                    {
+                        "source": "api",
+                        "data": "{{top_error_endpoints}}"
+                    },
+                    {
+                        "source": "database",
+                        "data": "{{timeout_count}}"
+                    }
+                ]
+            },
+            "on_success": {
+                "next_step": "step_6_report"
+            },
+            "output_variables": [
+                "timeline",
+                "causal_chain",
+                "confidence_pct"
+            ]
+        },
+        {
+            "id": "step_6_report",
+            "name": "Generate Incident Report",
+            "tool": "generate_report",
+            "input": {
+                "spike_ratio": "{{spike_ratio}}",
+                "spike_start_time": "{{spike_start_time}}",
+                "affected_services": "{{affected_services}}",
+                "deployment_id": "{{last_deployment_id}}",
+                "db_timeout_count": "{{timeout_count}}",
+                "timeline": "{{timeline}}",
+                "causal_chain": "{{causal_chain}}",
+                "confidence_pct": "{{confidence_pct}}"
+            },
+            "on_success": {
+                "next_step": "halt_incident_reported"
+            },
+            "output_variables": [
+                "report_path"
+            ]
+        }
+    ],
+    "terminal_states": {
+        "halt_no_incident": {
+            "status": "CLEAR",
+            "message": "No anomaly detected. System healthy."
+        },
+        "halt_incident_reported": {
+            "status": "INCIDENT_REPORTED",
+            "message": "Incident report generated at {{report_path}}"
+        }
+    }
+}
